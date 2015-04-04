@@ -4,6 +4,9 @@
 // comment the following define statement to shut the built-in LED off
 #define USE_DEBUG_LED 1
 
+// Number of milli seconds after which watch will go to sleep automatically
+#define AUTO_SLEEP_AFTER_MILLI_SECONDS    20000
+
 // Using compiler directives to save runtime memory, could've very well been 'const int' declarations too
 #define STATE_DEFAULT           0
 #define STATE_SHOW_SECONDS      0
@@ -18,20 +21,19 @@
 // Make sure that whenever a new state is added, or exisitng one is removed, the count is reflected in TOTAL_STATES
 #define TOTAL_STATES            9
 
-#define BUTTON_SENSITIVITY_MILLIS  5
+#define BUTTON_SENSITIVITY_MILLIS  3
 #define BUTTON_HOLD_DELAY          3000
 
 #define BUTTON1        0
 #define BUTTON2        1
 #define BUTTON3        2
-#define BUTTON4        3
 // Alwyas make sure that TOTAL_BUTTONS is defined as number of Buttons
-#define TOTAL_BUTTONS  4
+#define TOTAL_BUTTONS  3
 // 2 Events per Button - Pressed and Hold
 #define EVENTS_PER_BUTTON  2
 #define TOTAL_BUTTON_EVENTS  (TOTAL_BUTTONS * EVENTS_PER_BUTTON)
 
-const int BUTTON_PINS [ TOTAL_BUTTONS ] = { 8, 9, 10, 11 };
+const int BUTTON_PINS [ TOTAL_BUTTONS ] = { 8, 9, 10 };
 
 volatile int lastButtonInterruptTime [ TOTAL_BUTTONS ] = { -BUTTON_SENSITIVITY_MILLIS };
 volatile unsigned int buttonPressedTime [ TOTAL_BUTTONS ] = { 0 };
@@ -68,7 +70,7 @@ void setup()
 
   attachInterrupt ( BUTTON_PINS [ BUTTON1 ], pinChanged1, CHANGE );
   attachInterrupt ( BUTTON_PINS [ BUTTON2 ], pinChanged2, CHANGE );
-  attachInterrupt ( BUTTON_PINS [ BUTTON3 ], pinChanged3, CHANGE );
+//  attachInterrupt ( BUTTON_PINS [ BUTTON3 ], pinChanged3, CHANGE );
 
   snoozeConfig.pinMode ( BUTTON_PINS [ BUTTON3 ], INPUT, CHANGE );
 
@@ -81,17 +83,28 @@ time_t getCurrentTime()
 }
 
 const int STATE_MACHINE [ TOTAL_STATES ] [ TOTAL_BUTTON_EVENTS ] = {
-  { STATE_SHOW_MINUTES, STATE_SHOW_MINUTES, STATE_SHOW_HOURS,   STATE_SHOW_HOURS,   STATE_DEFAULT,   STATE_SHUTDOWN }, // STATE_SHOW_SECONDS
-  { STATE_SHOW_SECONDS, STATE_SHOW_SECONDS, STATE_SHOW_HOURS,   STATE_SHOW_HOURS,   STATE_DEFAULT,   STATE_SHUTDOWN }, // STATE_SHOW_MINUTES
-  { STATE_SHOW_MINUTES, STATE_SHOW_MINUTES, STATE_SHOW_SECONDS, STATE_SHOW_SECONDS, STATE_DEFAULT,   STATE_SHUTDOWN }, // STATE_SHOW_HOURS
-  { STATE_DEFAULT,      STATE_DEFAULT,      STATE_DEFAULT,      STATE_DEFAULT,      STATE_DEFAULT,   STATE_SHUTDOWN }
+  //        0                  1                  2                3                4                5
+  { STATE_SHOW_MINUTES, STATE_SHUTDOWN, STATE_SHOW_HOURS,   STATE_SHUTDOWN,   STATE_DEFAULT,   STATE_SHUTDOWN }, //  0 - STATE_SHOW_SECONDS
+  { STATE_SHOW_SECONDS, STATE_SHUTDOWN, STATE_SHOW_HOURS,   STATE_SHUTDOWN,   STATE_DEFAULT,   STATE_SHUTDOWN }, //  1 - STATE_SHOW_MINUTES
+  { STATE_SHOW_MINUTES, STATE_SHUTDOWN, STATE_SHOW_SECONDS, STATE_SHUTDOWN,   STATE_DEFAULT,   STATE_SHUTDOWN }, //  2 - STATE_SHOW_HOURS
+  { STATE_SHOW_MINUTES, STATE_SHUTDOWN, STATE_SHOW_SECONDS, STATE_SHUTDOWN,   STATE_DEFAULT,   STATE_SHUTDOWN }, //  3 - STATE_SHOW_ALL
+  { STATE_DEFAULT,      STATE_DEFAULT,  STATE_DEFAULT,      STATE_DEFAULT,    STATE_DEFAULT,   STATE_DEFAULT  }, //  4 - STATE_SHUTDOWN
+  { STATE_DEFAULT,      STATE_DEFAULT,  STATE_DEFAULT,      STATE_DEFAULT,    STATE_DEFAULT,   STATE_DEFAULT  }, //  5 - STATE_SET_TIME_HOURS
+  { STATE_DEFAULT,      STATE_DEFAULT,  STATE_DEFAULT,      STATE_DEFAULT,    STATE_DEFAULT,   STATE_DEFAULT  }, //  6 - STATE_SET_TIME_MINS
+  { STATE_DEFAULT,      STATE_DEFAULT,  STATE_DEFAULT,      STATE_DEFAULT,    STATE_DEFAULT,   STATE_DEFAULT  }, //  7 - STATE_SET_TIME_INC
+  { STATE_DEFAULT,      STATE_DEFAULT,  STATE_DEFAULT,      STATE_DEFAULT,    STATE_DEFAULT,   STATE_DEFAULT  }  //  8 - STATE_SET_TIME_DEC
 };
 
+elapsedMillis millisSinceInterrupt = 0;
+
 void changeState ( int buttonId, int event ) {
+//  millisSinceInterrupt = 0;
   currentState = STATE_MACHINE [ currentState ] [ event ];
   preemptAnimation = true;
-  buttonPressedTime [ buttonId ] = 0;
+  buttonPressedTime [ buttonId ] = millisSinceInterrupt;
 }
+
+elapsedMillis millisSinceLastActivity = 0;
 
 void executeInterruptRoutine ( int buttonId ) {
 
@@ -101,8 +114,8 @@ void executeInterruptRoutine ( int buttonId ) {
 
   if ( pinVal == LOW ) {
 
-    int currMillis = millis ();
-    int timeLapse = currMillis - buttonPressedTime [ buttonId ];
+//    int currMillis = millis ();
+    int timeLapse = millisSinceInterrupt - buttonPressedTime [ buttonId ];
 
     if ( timeLapse >= BUTTON_HOLD_DELAY ) {
       changeState ( buttonId, ( 2 * buttonId ) + 1 );
@@ -117,8 +130,10 @@ void executeInterruptRoutine ( int buttonId ) {
     buttonPressedTime [ buttonId ] = millis ();
   }
 
+//  millisSinceInterrupt = 0;
+  millisSinceLastActivity = 0;
+
   sei ();
-  
 }
 
 void pinChanged1 () {
@@ -136,13 +151,15 @@ void pinChanged3 () {
 
 #define OUTER_LED_GROUP     5
 
+// 1 second long animation
+#define ANIMATION_LENGTH_IN_MILLIS  1000
+
 int loopDelay = 1000;
 int hours = 0;
 int minutes = 0;
 int seconds = 0;
 int outerCircleLed = 0;
 int innerCircleLed = 0;
-int animationLength = 1000; // 1 seconds
 int counter = 0;
 int previousState = -1;
 
@@ -162,13 +179,17 @@ void loop()
   digitalWrite ( LED_BUILTIN, builtInLedState );
 #endif
 
+  if ( millisSinceLastActivity > AUTO_SLEEP_AFTER_MILLI_SECONDS ) {
+    currentState = STATE_SHUTDOWN;
+  }
+  
   switch ( currentState ) {
 
     case STATE_SHOW_SECONDS:
       seconds = ( second() + 1 );
       outerCircleLed = ( seconds / OUTER_LED_GROUP );
       innerCircleLed = ( seconds % OUTER_LED_GROUP );
-      animateLeds ( outerCircleLed, innerCircleLed, animationLength );
+      animateLeds ( outerCircleLed, innerCircleLed, ANIMATION_LENGTH_IN_MILLIS );
       break;
 
     case STATE_SHOW_MINUTES:
@@ -178,14 +199,14 @@ void loop()
       }
       outerCircleLed = hours;
       innerCircleLed = 0;
-      animateLeds ( outerCircleLed, innerCircleLed, animationLength );
+      animateLeds ( outerCircleLed, innerCircleLed, ANIMATION_LENGTH_IN_MILLIS );
       break;
 
     case STATE_SHOW_HOURS:
       minutes = ( minute () + 1 );
       outerCircleLed = minutes / OUTER_LED_GROUP;
       innerCircleLed = ( minutes % OUTER_LED_GROUP );
-      animateLeds ( outerCircleLed, innerCircleLed, animationLength );
+      animateLeds ( outerCircleLed, innerCircleLed, ANIMATION_LENGTH_IN_MILLIS );
       break;
 
     case STATE_SHUTDOWN:
@@ -204,10 +225,11 @@ void loop()
 
       isSleeping = false;
       currentState = 0;
+      millisSinceLastActivity = 0;
       break;
 
     case STATE_SHOW_ALL:
-      animateLeds ( 12, 4, animationLength );
+      animateLeds ( 12, 4, ANIMATION_LENGTH_IN_MILLIS );
       break;
   }
   
@@ -236,12 +258,18 @@ P7 R3  7L0H(13)  7L1H(14)  7L2H(15)  7L3H(16)
 
 */
 
+const int LED_ID_MAPPING [ TOTAL_LED + 1 ] = {
+  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 13, 14, 15
+};
+
 int getRowPin ( int led ) {
-  return ( ( led - 1 ) / TOTAL_COLS ) + TOTAL_COLS;
+  int ledId = LED_ID_MAPPING [ led ];
+  return ( ( ledId - 1 ) / TOTAL_COLS ) + TOTAL_COLS;
 }
 
 int getColPin ( int led ) {
-  return ( ( led - 1 ) % TOTAL_COLS );
+  int ledId = LED_ID_MAPPING [ led ];
+  return ( ( ledId - 1 ) % TOTAL_COLS );
 }
 
 void setState ( int rowPin, int colPin, boolean state ) {
@@ -258,9 +286,10 @@ void setState ( int rowPin, int colPin, boolean state ) {
 
 void setLedState ( int led, boolean state ) {
 
+  int row = getRowPin ( led );
+  int col = getColPin ( led );
+
   if ( led > 0 ) {
-    int row = getRowPin ( led );
-    int col = getColPin ( led );
     setState ( row, col, state );
   }
 }
@@ -278,41 +307,31 @@ void animateLeds ( int outerLedNumber, int innerLedNumber, int forMillis ) {
 
   preemptAnimation = false;
 
-  int ledsToAnimate [ TOTAL_LED ] = {0};
-  int ledCounter = 0;
+  int ledsToAnimate [ TOTAL_LED + 1 ] = {0};
 
   for ( int led = 1; led <= TOTAL_LED; led ++ ) {
     if ( led < CIRCLE_BOUNDARY ) {
       if ( led <= outerLedNumber ) {
-        ledsToAnimate [ ledCounter ++ ] = led;
+        ledsToAnimate [ led ] = led;
       }
     }
     else {
       if ( led < ( CIRCLE_BOUNDARY + innerLedNumber ) ) {
-        ledsToAnimate [ ledCounter ++ ] = led;
+        ledsToAnimate [ led ] = led;
       }
     }
   }
 
-  float animatorDelay = LED_FLICKER_DELAY;
-
-  int animationLength = 0;
-  int startMillis = millis ();
-
+  elapsedMillis animationLength = 0;
+  
   while ( !preemptAnimation && ( animationLength < forMillis ) ) {
 
-    for ( int i = 0; i < TOTAL_LED; i ++ ) {
+    for ( int i = 1; i <= TOTAL_LED; i ++ ) {
       setLedState ( ledsToAnimate [ i ], HIGH );
-      delay ( animatorDelay );
+//      delay ( LED_FLICKER_DELAY );
       setLedState ( ledsToAnimate [ i ], LOW );
+//      delay ( LED_FLICKER_DELAY );
     }
-
-    int currMillis = millis ();
-    if ( currMillis < startMillis ) {
-      currMillis += 1000;
-    }
-
-    animationLength = currMillis - startMillis;
   }
 }
 
