@@ -1,34 +1,230 @@
 #include <Time.h>
-#include <avr/sleep.h>
+#include <Snooze.h>
 
+// comment the following define statement to shut the built-in LED off
+#define USE_DEBUG_LED 1
 
-const int TOTAL_LED = 16;
-const int TOTAL_COLS = 4;
-const int TOTAL_ROWS = 4;
+// Using compiler directives to save runtime memory, could've very well been 'const int' declarations too
+#define STATE_DEFAULT           0
+#define STATE_SHOW_SECONDS      0
+#define STATE_SHOW_MINUTES      1
+#define STATE_SHOW_HOURS        2
+#define STATE_SHOW_ALL          3
+#define STATE_SHUTDOWN          4
+#define STATE_SET_TIME_HOURS    5
+#define STATE_SET_TIME_MINS     6
+#define STATE_SET_TIME_INC      7
+#define STATE_SET_TIME_DEC      8
+// Make sure that whenever a new state is added, or exisitng one is removed, the count is reflected in TOTAL_STATES
+#define TOTAL_STATES            9
 
-const int SECONDS_IN_MINUTE = 60;
-const float LED_FLICKER_DELAY = 0.5;
-const int CIRCLE_BOUNDARY = 13;
+#define BUTTON_SENSITIVITY_MILLIS  5
+#define BUTTON_HOLD_DELAY          3000
 
-const int BUTTON1_PIN = 8;
-const int BUTTON2_PIN = 9;
+#define BUTTON1        0
+#define BUTTON2        1
+#define BUTTON3        2
+#define BUTTON4        3
+// Alwyas make sure that TOTAL_BUTTONS is defined as number of Buttons
+#define TOTAL_BUTTONS  4
+// 2 Events per Button - Pressed and Hold
+#define EVENTS_PER_BUTTON  2
+#define TOTAL_BUTTON_EVENTS  (TOTAL_BUTTONS * EVENTS_PER_BUTTON)
 
-const int BUTTON1_PRESSED = 0;
-const int BUTTON2_PRESSED = 1;
-const int BUTTON1_HOLD = 2;
-const int BUTTON2_HOLD = 3;
+const int BUTTON_PINS [ TOTAL_BUTTONS ] = { 8, 9, 10, 11 };
 
-const int BUTTON_SENSITIVITY_MILLIS = 5;
-const int BUTTON_HOLD_DELAY = 3000;
-
-volatile int b1IntLastTime = -BUTTON_SENSITIVITY_MILLIS;
-volatile int b2IntLastTime = -BUTTON_SENSITIVITY_MILLIS;
+volatile int lastButtonInterruptTime [ TOTAL_BUTTONS ] = { -BUTTON_SENSITIVITY_MILLIS };
+volatile unsigned int buttonPressedTime [ TOTAL_BUTTONS ] = { 0 };
 
 volatile boolean preemptAnimation = false;
-volatile unsigned int currentState = 0;
+volatile bool isSleeping = false;
 
-volatile unsigned int buttonOnePressedTime = 0;
-volatile unsigned int buttonTwoPressedTime = 0;
+// According to library, this has to be global variable, odd though!
+SnoozeBlock snoozeConfig;
+
+volatile unsigned int currentState = STATE_SHOW_SECONDS;
+
+void setup()
+{
+
+  setSyncProvider ( getCurrentTime );
+
+  int i;
+
+  // LED Pins
+  for ( i = 0; i < 8; i ++ ) {
+    pinMode ( i, OUTPUT );
+  }
+
+  // Button Pins
+  for ( i = 0; i < TOTAL_BUTTONS; i ++ ) {
+    pinMode ( BUTTON_PINS [ i ], INPUT );
+  }
+
+  // Debug LED setup
+#if defined( USE_DEBUG_LED )
+  pinMode ( LED_BUILTIN, OUTPUT );
+#endif
+
+  attachInterrupt ( BUTTON_PINS [ BUTTON1 ], pinChanged1, CHANGE );
+  attachInterrupt ( BUTTON_PINS [ BUTTON2 ], pinChanged2, CHANGE );
+  attachInterrupt ( BUTTON_PINS [ BUTTON3 ], pinChanged3, CHANGE );
+
+  snoozeConfig.pinMode ( BUTTON_PINS [ BUTTON3 ], INPUT, CHANGE );
+
+  setSyncInterval ( 1 );
+}
+
+time_t getCurrentTime()
+{
+  return Teensy3Clock.get();
+}
+
+const int STATE_MACHINE [ TOTAL_STATES ] [ TOTAL_BUTTON_EVENTS ] = {
+  { STATE_SHOW_MINUTES, STATE_SHOW_MINUTES, STATE_SHOW_HOURS,   STATE_SHOW_HOURS,   STATE_DEFAULT,   STATE_SHUTDOWN }, // STATE_SHOW_SECONDS
+  { STATE_SHOW_SECONDS, STATE_SHOW_SECONDS, STATE_SHOW_HOURS,   STATE_SHOW_HOURS,   STATE_DEFAULT,   STATE_SHUTDOWN }, // STATE_SHOW_MINUTES
+  { STATE_SHOW_MINUTES, STATE_SHOW_MINUTES, STATE_SHOW_SECONDS, STATE_SHOW_SECONDS, STATE_DEFAULT,   STATE_SHUTDOWN }, // STATE_SHOW_HOURS
+  { STATE_DEFAULT,      STATE_DEFAULT,      STATE_DEFAULT,      STATE_DEFAULT,      STATE_DEFAULT,   STATE_SHUTDOWN }
+};
+
+void changeState ( int buttonId, int event ) {
+  currentState = STATE_MACHINE [ currentState ] [ event ];
+  preemptAnimation = true;
+  buttonPressedTime [ buttonId ] = 0;
+}
+
+void executeInterruptRoutine ( int buttonId ) {
+
+  cli ();
+  
+  int pinVal = digitalRead ( BUTTON_PINS [ buttonId ] );
+
+  if ( pinVal == LOW ) {
+
+    int currMillis = millis ();
+    int timeLapse = currMillis - buttonPressedTime [ buttonId ];
+
+    if ( timeLapse >= BUTTON_HOLD_DELAY ) {
+      changeState ( buttonId, ( 2 * buttonId ) + 1 );
+    }
+    else {
+      if ( timeLapse >= BUTTON_SENSITIVITY_MILLIS ) {
+        changeState ( buttonId, ( 2 * buttonId ) );
+      }
+    }
+  }
+  else {
+    buttonPressedTime [ buttonId ] = millis ();
+  }
+
+  sei ();
+  
+}
+
+void pinChanged1 () {
+  executeInterruptRoutine ( BUTTON1 );
+}
+
+void pinChanged2 () {
+    executeInterruptRoutine ( BUTTON2 );
+}
+
+void pinChanged3 () {
+    executeInterruptRoutine ( BUTTON3 );
+}
+
+
+#define OUTER_LED_GROUP     5
+
+int loopDelay = 1000;
+int hours = 0;
+int minutes = 0;
+int seconds = 0;
+int outerCircleLed = 0;
+int innerCircleLed = 0;
+int animationLength = 1000; // 1 seconds
+int counter = 0;
+int previousState = -1;
+
+#if defined( USE_DEBUG_LED )
+bool builtInLedState = HIGH;
+#endif
+
+void loop()
+{
+
+  if ( previousState != currentState ) {
+    resetAllLeds ();
+  }
+  
+#if defined( USE_DEBUG_LED )
+  builtInLedState = !builtInLedState;
+  digitalWrite ( LED_BUILTIN, builtInLedState );
+#endif
+
+  switch ( currentState ) {
+
+    case STATE_SHOW_SECONDS:
+      seconds = ( second() + 1 );
+      outerCircleLed = ( seconds / OUTER_LED_GROUP );
+      innerCircleLed = ( seconds % OUTER_LED_GROUP );
+      animateLeds ( outerCircleLed, innerCircleLed, animationLength );
+      break;
+
+    case STATE_SHOW_MINUTES:
+      hours = hour () + 1; // because it is in 24Hr format (0-23)
+      if ( hours > 12 ) {
+        hours = hours - 12;
+      }
+      outerCircleLed = hours;
+      innerCircleLed = 0;
+      animateLeds ( outerCircleLed, innerCircleLed, animationLength );
+      break;
+
+    case STATE_SHOW_HOURS:
+      minutes = ( minute () + 1 );
+      outerCircleLed = minutes / OUTER_LED_GROUP;
+      innerCircleLed = ( minutes % OUTER_LED_GROUP );
+      animateLeds ( outerCircleLed, innerCircleLed, animationLength );
+      break;
+
+    case STATE_SHUTDOWN:
+      isSleeping  = true;
+      resetAllLeds ();
+
+#if defined( USE_DEBUG_LED )
+      digitalWrite ( LED_BUILTIN, LOW );
+#endif
+
+      Snooze.deepSleep ( snoozeConfig );
+
+#if defined( USE_DEBUG_LED )
+      digitalWrite ( LED_BUILTIN, builtInLedState );
+#endif
+
+      isSleeping = false;
+      currentState = 0;
+      break;
+
+    case STATE_SHOW_ALL:
+      animateLeds ( 12, 4, animationLength );
+      break;
+  }
+  
+  previousState = currentState;
+
+}
+
+// ---------------------------------------------------- //
+//            LED Config and Methods Start
+// ---------------------------------------------------- //
+
+// LED related constants
+#define TOTAL_LED          16
+#define TOTAL_COLS          4
+#define TOTAL_ROWS          4
+#define LED_FLICKER_DELAY 0.5
+#define CIRCLE_BOUNDARY    13
 
 /*
             P0         P1        P2        P3
@@ -39,24 +235,6 @@ P6 R2  6L0H(09)  6L1H(10)  6L2H(11)  6L3H(12)
 P7 R3  7L0H(13)  7L1H(14)  7L2H(15)  7L3H(16)
 
 */
-
-void setup()                   
-{
-//  setTime(23, 20, 30, 1, 1, 2014); // hour, minutes, secs
-  setSyncProvider ( getCurrentTime );
-
-  for ( int i = 0; i < 8; i ++ ) {
-    pinMode ( i, OUTPUT ); 
-  }
-  
-  pinMode ( BUTTON1_PIN, INPUT );
-  pinMode ( BUTTON2_PIN, INPUT );
-
-  attachInterrupt ( BUTTON1_PIN, buttonOnePinChange, CHANGE );
-  attachInterrupt ( BUTTON2_PIN, buttonTwoPinChange, CHANGE );
-  
-  setSyncInterval ( 1 );
-}
 
 int getRowPin ( int led ) {
   return ( ( led - 1 ) / TOTAL_COLS ) + TOTAL_COLS;
@@ -69,17 +247,17 @@ int getColPin ( int led ) {
 void setState ( int rowPin, int colPin, boolean state ) {
 
   if ( state == HIGH ) {
-   digitalWrite ( rowPin, LOW );
-   digitalWrite ( colPin, HIGH );
+    digitalWrite ( rowPin, LOW );
+    digitalWrite ( colPin, HIGH );
   }
   else {
-   digitalWrite ( rowPin, HIGH );
-   digitalWrite ( colPin, LOW );
+    digitalWrite ( rowPin, HIGH );
+    digitalWrite ( colPin, LOW );
   }
-} 
+}
 
 void setLedState ( int led, boolean state ) {
-  
+
   if ( led > 0 ) {
     int row = getRowPin ( led );
     int col = getColPin ( led );
@@ -87,13 +265,13 @@ void setLedState ( int led, boolean state ) {
   }
 }
 
-void resetAll () {
-  
+void resetAllLeds () {
+
   for ( int i = 1; i <= TOTAL_LED; i ++ ) {
     int row = getRowPin ( i );
     int col = getColPin ( i );
     setState ( row, col, LOW );
-  }  
+  }
 }
 
 void animateLeds ( int outerLedNumber, int innerLedNumber, int forMillis ) {
@@ -102,7 +280,7 @@ void animateLeds ( int outerLedNumber, int innerLedNumber, int forMillis ) {
 
   int ledsToAnimate [ TOTAL_LED ] = {0};
   int ledCounter = 0;
-  
+
   for ( int led = 1; led <= TOTAL_LED; led ++ ) {
     if ( led < CIRCLE_BOUNDARY ) {
       if ( led <= outerLedNumber ) {
@@ -115,182 +293,30 @@ void animateLeds ( int outerLedNumber, int innerLedNumber, int forMillis ) {
       }
     }
   }
-  
-//  int factor = ( TOTAL_LED - ledCounter ) * 2;
-//  float animatorDelay = LED_FLICKER_DELAY / ( factor + 1 );
+
   float animatorDelay = LED_FLICKER_DELAY;
 
   int animationLength = 0;
   int startMillis = millis ();
-  
+
   while ( !preemptAnimation && ( animationLength < forMillis ) ) {
-  
-    int i;
-    for ( i = 0; i <= ledCounter; i ++ ) {
+
+    for ( int i = 0; i < TOTAL_LED; i ++ ) {
       setLedState ( ledsToAnimate [ i ], HIGH );
       delay ( animatorDelay );
       setLedState ( ledsToAnimate [ i ], LOW );
     }
-    for ( ; i <= 16; i ++ ) {
-      setLedState ( ledsToAnimate [ 0 ], LOW );
-      delay ( animatorDelay );
-      setLedState ( ledsToAnimate [ i ], LOW );
-    }
 
-    
     int currMillis = millis ();
     if ( currMillis < startMillis ) {
       currMillis += 1000;
     }
-    
-    animationLength += currMillis - startMillis;
+
+    animationLength = currMillis - startMillis;
   }
 }
 
-time_t getCurrentTime()
-{
-  return Teensy3Clock.get();
-}
+// ---------------------------------------------------- //
+//            LED Config and Methods End
+// ---------------------------------------------------- //
 
-const int OUTER_LED_GROUP = 5;
-const int STATE_MACHINE [ 5 ] [ 4 ] = { 
-    { 1, 2, 3, 4 }, 
-    { 0, 2, 3, 4 }, 
-    { 1, 0, 3, 4 },
-    { 3, 3, 0, 3 },
-    { 4, 4, 3, 0 }
-};
-  
-/*
-  S0: Second Display
-  S1: Hour Display
-  S2: Minute Display
-  S3: Sleep
-  S4: Settings/All On
-  
-  B1: Pin 8 - 0
-  B2: Pin 9 - 1
-  B1H:      - 2
-  B2H:      - 3
-
-        B1    B2   B1H   B2H
-  S0:    1    2      3     4
-  S1:    0    2      3     4
-  S2:    1    0      3     4
-  S3:    3    3      0     3
-  S4:    4    4      3     0
-*/
-
-void changeState ( int event ) {
-  cli ();
-    currentState = STATE_MACHINE [ currentState ] [ event ];
-    preemptAnimation = true;
-  sei ();
-}
-
-void buttonOnePinChange () {
-  
-  int pinVal = digitalRead ( BUTTON1_PIN );
-  
-  if ( pinVal == LOW ) {
-
-    int currMillis = millis ();
-    int timeLapse = currMillis - buttonOnePressedTime;
-  
-    if ( timeLapse >= BUTTON_HOLD_DELAY ) {
-      changeState ( BUTTON1_HOLD );
-      resetAll ();
-      buttonOnePressedTime = 0;
-    }
-    else {
-      if ( timeLapse >= BUTTON_SENSITIVITY_MILLIS ) {
-        changeState ( BUTTON1_PRESSED );
-        resetAll ();
-        buttonOnePressedTime = 0;
-      }
-    }
-  }
-  else {
-    buttonOnePressedTime = millis ();
-  }
-}
-
-void buttonTwoPinChange () {
-  
-  int pinVal = digitalRead ( BUTTON2_PIN );
-  
-  if ( pinVal == LOW ) {
-    
-    int currMillis = millis ();
-    int timeLapse = currMillis - buttonTwoPressedTime;
-
-    if ( timeLapse >= BUTTON_HOLD_DELAY ) {
-      changeState ( BUTTON2_HOLD );
-      resetAll ();
-      buttonTwoPressedTime = 0;
-    }
-    else {
-      if ( timeLapse >= BUTTON_SENSITIVITY_MILLIS ) {
-        changeState ( BUTTON2_PRESSED );
-        resetAll ();
-        buttonTwoPressedTime = 0;
-      }
-    }
-  }
-  else {
-    buttonTwoPressedTime = millis ();
-  }
-}
-
-
-void loop()                    
-{
-  int loopDelay = 1000;
-  int hours;
-  int minutes;
-  int seconds;
-  int outerCircleLed;
-  int innerCircleLed;
-  int animationLength = 1000; // 3 seconds
-  
-  resetAll ();
-  
-  while ( 1 ) {
-  
-    switch ( currentState ) {
-
-      case 0:
-        seconds = ( second() + 1 );
-        outerCircleLed = ( seconds / OUTER_LED_GROUP );
-        innerCircleLed = ( seconds % OUTER_LED_GROUP );
-        animateLeds ( outerCircleLed, innerCircleLed, animationLength );
-        break;
-        
-      case 1:
-        hours = hour () + 1; // because it is in 24Hr format (0-23)
-        if ( hours > 12 ) {
-          hours = hours - 12;
-        }
-        outerCircleLed = hours;
-        innerCircleLed = 0;
-        animateLeds ( outerCircleLed, innerCircleLed, animationLength );    
-        break;
-        
-      case 2:
-        minutes = ( minute () + 1 );
-        outerCircleLed = minutes / OUTER_LED_GROUP;
-        innerCircleLed = ( minutes % OUTER_LED_GROUP );
-        animateLeds ( outerCircleLed, innerCircleLed, animationLength );
-        break;
-        
-      case 3:
-        resetAll ();
-        break;
-        
-       case 4:
-        animateLeds ( 12, 4, animationLength );
-        break;
-    }
-  }
-} 
- 
