@@ -1,6 +1,7 @@
 #include <Time.h>
 #include <Snooze.h>
 
+
 // comment the following define statement to shut the built-in LED off
 #define USE_DEBUG_LED 1
 
@@ -33,6 +34,8 @@
 #define EVENTS_PER_BUTTON  2
 #define TOTAL_BUTTON_EVENTS  (TOTAL_BUTTONS * EVENTS_PER_BUTTON)
 
+#define TOTAL_LED_PINS_IN_USE  8 // It is assumed that 0-7 numbered pins are used
+
 const int BUTTON_PINS [ TOTAL_BUTTONS ] = { 8, 9, 10 };
 
 volatile int lastButtonInterruptTime [ TOTAL_BUTTONS ] = { -BUTTON_SENSITIVITY_MILLIS };
@@ -54,7 +57,7 @@ void setup()
   int i;
 
   // LED Pins
-  for ( i = 0; i < 8; i ++ ) {
+  for ( i = 0; i < TOTAL_LED_PINS_IN_USE; i ++ ) {
     pinMode ( i, OUTPUT );
   }
 
@@ -75,6 +78,11 @@ void setup()
   snoozeConfig.pinMode ( BUTTON_PINS [ BUTTON3 ], INPUT, CHANGE );
 
   setSyncInterval ( 1 );
+  
+//  Serial.begin(9600);
+//  Serial.println("Hello world");
+//  delay(2000);// Give reader a chance to see the output.
+
 }
 
 time_t getCurrentTime()
@@ -114,7 +122,6 @@ void executeInterruptRoutine ( int buttonId ) {
 
   if ( pinVal == LOW ) {
 
-//    int currMillis = millis ();
     int timeLapse = millisSinceInterrupt - buttonPressedTime [ buttonId ];
 
     if ( timeLapse >= BUTTON_HOLD_DELAY ) {
@@ -161,11 +168,24 @@ int seconds = 0;
 int outerCircleLed = 0;
 int innerCircleLed = 0;
 int counter = 0;
-int previousState = -1;
+unsigned int previousState = 0xFFF;
 
 #if defined( USE_DEBUG_LED )
 bool builtInLedState = HIGH;
 #endif
+
+int loopCounter = 1;
+void debugLoop () {
+  setLedState ( loopCounter, HIGH );
+  delay ( 1000 );
+  setLedState ( loopCounter, LOW );
+  
+  loopCounter ++;
+  
+  if ( loopCounter == 17 ){
+    loopCounter = 1;
+  }
+}
 
 void loop()
 {
@@ -242,38 +262,32 @@ void loop()
 // ---------------------------------------------------- //
 
 // LED related constants
-#define TOTAL_LED          16
-#define TOTAL_COLS          4
-#define TOTAL_ROWS          4
-#define LED_FLICKER_DELAY 0.5
-#define CIRCLE_BOUNDARY    13
+#define TOTAL_LED            16
+#define TOTAL_COLS            4
+#define TOTAL_ROWS            4
+#define LED_FLICKER_DELAY     0.5
+#define CIRCLE_BOUNDARY       13
+#define ROWED_LED_COUNT       0  // Number of LEDs that are 'rowed' or have multiple LEDs instead of one
+#define MAX_LEDS_FOR_ONE_LED  3  // Number of LEDs in a row
+#define ACTUAL_LED_COUNT      TOTAL_LED + ( ( MAX_LEDS_FOR_ONE_LED - 1 ) * ROWED_LED_COUNT )
 
-/*
-            P0         P1        P2        P3
-            C0         C1        C2        C3
-P4 R0  4L0H(01)  4L1H(02)  4L2H(03)  4L3H(04)
-P5 R1  5L0H(05)  5L1H(06)  5L2H(07)  5L3H(08)
-P6 R2  6L0H(09)  6L1H(10)  6L2H(11)  6L3H(12)
-P7 R3  7L0H(13)  7L1H(14)  7L2H(15)  7L3H(16)
+const unsigned int ROW_PIN_MASK = 0xFF00; // First Byte of address is Row ID
+const unsigned int COL_PIN_MASK = 0x00FF; // Second Byte of address is Col ID
 
-*/
-
-const int LED_ID_MAPPING [ TOTAL_LED + 1 ] = {
-  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 13, 14, 15
+const unsigned int ledPins [ TOTAL_LED + 1 ] = {
+  0x0000, // LED 'zero' means nothing, it does not exist, but arrays are zero-based indexed
+  0x0400, 0x0401, 0x0402, 0x0403, 
+  0x0500, 0x0501, 0x0502, 0x0503, 
+  0x0600, 0x0601, 0x0602, 0x0603, 
+  0x0700, 0x0701, 0x0702, 0x0703
 };
 
-int getRowPin ( int led ) {
-  int ledId = LED_ID_MAPPING [ led ];
-  return ( ( ledId - 1 ) / TOTAL_COLS ) + TOTAL_COLS;
-}
+void setLedState ( int led, boolean state ) {
 
-int getColPin ( int led ) {
-  int ledId = LED_ID_MAPPING [ led ];
-  return ( ( ledId - 1 ) % TOTAL_COLS );
-}
-
-void setState ( int rowPin, int colPin, boolean state ) {
-
+  unsigned int address = ledPins [ led ];
+  unsigned int rowPin = ( address & ROW_PIN_MASK ) >> 8;
+  unsigned int colPin = address & COL_PIN_MASK;
+  
   if ( state == HIGH ) {
     digitalWrite ( rowPin, LOW );
     digitalWrite ( colPin, HIGH );
@@ -284,26 +298,14 @@ void setState ( int rowPin, int colPin, boolean state ) {
   }
 }
 
-void setLedState ( int led, boolean state ) {
-
-  int row = getRowPin ( led );
-  int col = getColPin ( led );
-
-  if ( led > 0 ) {
-    setState ( row, col, state );
-  }
-}
-
 void resetAllLeds () {
 
   for ( int i = 1; i <= TOTAL_LED; i ++ ) {
-    int row = getRowPin ( i );
-    int col = getColPin ( i );
-    setState ( row, col, LOW );
+    setLedState ( i, LOW );
   }
 }
 
-void animateLeds ( int outerLedNumber, int innerLedNumber, int forMillis ) {
+void animateLeds ( int outerLedNumber, int innerLedNumber, unsigned int forMillis ) {
 
   preemptAnimation = false;
 
@@ -328,9 +330,7 @@ void animateLeds ( int outerLedNumber, int innerLedNumber, int forMillis ) {
 
     for ( int i = 1; i <= TOTAL_LED; i ++ ) {
       setLedState ( ledsToAnimate [ i ], HIGH );
-//      delay ( LED_FLICKER_DELAY );
       setLedState ( ledsToAnimate [ i ], LOW );
-//      delay ( LED_FLICKER_DELAY );
     }
   }
 }
