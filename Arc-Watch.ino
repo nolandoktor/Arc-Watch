@@ -61,11 +61,11 @@ volatile unsigned int currentState = STATE_SHOW_SECONDS;
 
 const byte ledPins [] = {
   0x00, // LED 'zero' means nothing, it does not exist, but arrays are zero-based indexed
-  0x50, 0x51, 0x52, 0x53, 0x54, //  1,  2,  3,  4,  5  |    1,   2,   3,   4,  10a
-  0x60, 0x61, 0x62, 0x63, 0x64, //  6,  7,  8,  9, 10  |    5,   6,   7,   8,  10c
-  0x70, 0x71, 0x72, 0x73, 0x74, // 11, 12, 13, 14, 15  |    9, 10b, 11b, 12b,  11a
-  0x80, 0x81, 0x82, 0x83, 0x84, // 16, 17, 18, 19, 20  |   13,  14,  15,  16,  11c
-  0x90, 0x91, 0x92, 0x93, 0x94  // 21, 22, 23, 24, 25  |  12a, 12c
+  0x50, 0x51, 0x52, 0x53, 0x54, //  1,  2,  3,  4,  5  |    4,   5,   6,   7,   1a
+  0x60, 0x61, 0x62, 0x63, 0x64, //  6,  7,  8,  9, 10  |    8,   9,  10,  11,   1c
+  0x70, 0x71, 0x72, 0x73, 0x74, // 11, 12, 13, 14, 15  |   12,  1b,  2b,  3b,   2a
+  0x80, 0x81, 0x82, 0x83, 0x84, // 16, 17, 18, 19, 20  |   13,  14,  15,  16,   2c
+  0x90, 0x91, 0x92, 0x93, 0x94  // 21, 22, 23, 24, 25  |   3a,  3c
 };
 
 typedef struct {
@@ -77,18 +77,18 @@ rowedLedConfig ledConfig [ TOTAL_LED + 1 ];
 
 void initLedConfig () {
   ledConfig [  0 ] = { 0, {  0,  0,  0} };
-  ledConfig [  1 ] = { 1, {  1,  1,  1} };
-  ledConfig [  2 ] = { 1, {  2,  2,  2} };
-  ledConfig [  3 ] = { 1, {  3,  3,  3} };
-  ledConfig [  4 ] = { 1, {  4,  4,  4} };
-  ledConfig [  5 ] = { 1, {  6,  6,  6} };
-  ledConfig [  6 ] = { 1, {  7,  7,  7} };
-  ledConfig [  7 ] = { 1, {  8,  8,  8} };
-  ledConfig [  8 ] = { 1, {  9,  9,  9} };
-  ledConfig [  9 ] = { 1, { 11, 11, 11} };
-  ledConfig [ 10 ] = { 3, {  5, 12, 10} };
-  ledConfig [ 11 ] = { 3, { 15, 13, 20} };
-  ledConfig [ 12 ] = { 3, { 21, 14, 22} };
+  ledConfig [  1 ] = { 3, {  5, 12, 10} };
+  ledConfig [  2 ] = { 3, { 15, 13, 20} };
+  ledConfig [  3 ] = { 3, { 21, 14, 22} };
+  ledConfig [  4 ] = { 1, {  1,  1,  1} };
+  ledConfig [  5 ] = { 1, {  2,  2,  2} };
+  ledConfig [  6 ] = { 1, {  3,  3,  3} };
+  ledConfig [  7 ] = { 1, {  4,  4,  4} };
+  ledConfig [  8 ] = { 1, {  6,  6,  6} };
+  ledConfig [  9 ] = { 1, {  7,  7,  7} };
+  ledConfig [ 10 ] = { 1, {  8,  8,  8} };
+  ledConfig [ 11 ] = { 1, {  9,  9,  9} };
+  ledConfig [ 12 ] = { 1, { 11, 11, 11} };
   ledConfig [ 13 ] = { 1, { 16, 16, 16} };
   ledConfig [ 14 ] = { 1, { 17, 17, 17} };
   ledConfig [ 15 ] = { 1, { 18, 18, 18} };
