@@ -126,7 +126,7 @@ void setup()
   
   initLedConfig ();
   
-#if defined( USE_DEBUG_LED )
+#if defined( SOFTWARE_DEBUG )
   Serial.begin(9600);
   delay(2000);// Give reader a chance to see the output.
 #endif
